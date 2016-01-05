@@ -49,7 +49,7 @@ def extract_text(li, recom_flag):
             logging.info("adding " + link + " to queue")
             # extracts product asin
             id = re.search(r'.*?//.*?/.*?/dp/(.*?)/.*', link)
-            if (done.find({'_id': id.group(1)}).count() == 1):
+            if (done.find({'_id': id.group(1)}).count() == 1 or queue.find({'_id': id.group(1)}).count() == 1):
                 continue
             queue.insert_one({'link': link, '_id': id.group(1)})
 
