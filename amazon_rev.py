@@ -3,6 +3,7 @@ from urllib2 import urlopen
 from pymongo import MongoClient
 import re
 import logging
+import sys
 
 # Every product seems to have a product ASIN id, when substituted in the following link, we get reviews for that product
 # product_asin = "B011RG8SOU"
@@ -16,6 +17,7 @@ db = client.revmine
 reviews = db.reviews
 done = db.done
 queue = db.queue
+recom = db.recom
 
 
 def main():
@@ -26,18 +28,13 @@ def main():
     while queue.find({}).count > 0:
         doit()
 
+    client.close()
 
-def doit():
-    # picking an object from the queue
-    product_asin = queue.find_one()['_id']
-    logging.info("Read next value from queue")
 
-    logging.info("Start loading reviews")
-    li = {}
-    li["_id"] = product_asin
+def extract_text(li, recom_flag):
 
     # Page 1 soup!
-    url_ = amazon_link % (product_asin, 1)
+    url_ = amazon_link % (li["_id"], 1)
     print "Trying " + url_ + " now!"
     soup = BeautifulSoup(urlopen(url_).read())
     li['title'] = soup('span', {'class': 'a-text-ellipsis'})[0].a.text
@@ -46,30 +43,69 @@ def doit():
     for j, row in enumerate(soup('span', {'class': 'review-text'})):
         li[str(j + 1)] = row.text
 
-    logging.info("adding entries to queue")
+    if (recom_flag == 0):
+        logging.info("adding entries to queue")
+        for div in soup('div', {'class': 'description'}):
+            link = div.a['href']
+            logging.info("adding " + link + " to queue")
+            # extracts product asin
+            id = re.search(r'.*?//.*?/.*?/dp/(.*?)/.*', link)
+            name = re.search(r'.*?//.*?/(.*?)/dp/.*?/.*', link)
+            name = name.group(1).lower()
 
-    for div in soup('div', {'class': 'description'}):
-        link = div.a['href']
-        logging.info("adding " + link + " to queue")
-        # extracts product asin
-        id = re.search(r'.*?//.*?/.*?/dp/(.*?)/.*', link)
-        if (done.find({'_id': id.group(1)}).count() == 1):
-            continue
-        queue.insert_one({'link': link, '_id': id.group(1)})
+            list_of_words = ['armor', 'case', 'hard', 'rubber', 'glass', 'cover', 'guard', 'protector']
+
+            for x in list_of_words:
+                if x in name:
+                    return (li, False)
+            if (done.find({'_id': id.group(1)}).count() == 1 or queue.find({'_id': id.group(1)}).count() == 1):
+                continue
+            queue.insert_one({'link': link, '_id': id.group(1)})
 
     for i in xrange(2, 6):
-        url_ = amazon_link % (product_asin, i)
+        url_ = amazon_link % (li["_id"], i)
         print "Trying " + url_ + " now!"
         soup = BeautifulSoup(urlopen(url_).read())
 
         for j, row in enumerate(soup('span', {'class': 'review-text'})):
             li[str(j + 10*(i-1))] = row.text
 
+    return (li, True)
+
+
+def doit():
+
+    # picking an object from the queue
+    product_asin = queue.find_one()['_id']
+    logging.info("Read next value from queue")
+
+    logging.info("Start loading reviews")
+
+    li = {}
+    li["_id"] = product_asin
+    (li, trfr) = extract_text(li, 0)
+
+    if not trfr:
+        return
+
     inserted_review = reviews.insert_one(li).inserted_id
     logging.info("reviews loaded into db for " + li['title'])
 
     logging.info("removing entry from queue")
     queue.remove({"_id": product_asin}, 1)
+
+    for i in queue.find():
+        li = {}
+        li["_id"] = i["_id"]
+        li["recom_by"] = product_asin
+        (li, trfr) = extract_text(li, 1)
+
+        if not trfr:
+            queue.remove({"_id": product_asin}, 1)
+            continue
+        logging.info("reviews loaded into recom for " + li['title'])
+        logging.info("removing entry from queue")
+        queue.remove({"_id": product_asin}, 1)
 
     assert(inserted_review == product_asin)
 
