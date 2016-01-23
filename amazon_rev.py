@@ -3,6 +3,7 @@ from urllib2 import urlopen
 from pymongo import MongoClient
 import re
 import logging
+import sys
 
 # Every product seems to have a product ASIN id, when substituted in the following link, we get reviews for that product
 # product_asin = "B011RG8SOU"
@@ -49,6 +50,14 @@ def extract_text(li, recom_flag):
             logging.info("adding " + link + " to queue")
             # extracts product asin
             id = re.search(r'.*?//.*?/.*?/dp/(.*?)/.*', link)
+            name = re.search(r'.*?//.*?/(.*?)/dp/.*?/.*', link)
+            name = name.group(1).lower()
+
+            list_of_words = ['armor', 'case', 'hard', 'rubber', 'glass', 'cover', 'guard', 'protector']
+
+            for x in list_of_words:
+                if x in name:
+                    return (li, False)
             if (done.find({'_id': id.group(1)}).count() == 1 or queue.find({'_id': id.group(1)}).count() == 1):
                 continue
             queue.insert_one({'link': link, '_id': id.group(1)})
@@ -61,7 +70,7 @@ def extract_text(li, recom_flag):
         for j, row in enumerate(soup('span', {'class': 'review-text'})):
             li[str(j + 10*(i-1))] = row.text
 
-    return li
+    return (li, True)
 
 
 def doit():
@@ -74,9 +83,12 @@ def doit():
 
     li = {}
     li["_id"] = product_asin
-    li = extract_text(li, 0)
+    (li, trfr) = extract_text(li, 0)
 
-    # inserted_review = reviews.insert_one(li).inserted_id
+    if not trfr:
+        return
+
+    inserted_review = reviews.insert_one(li).inserted_id
     logging.info("reviews loaded into db for " + li['title'])
 
     logging.info("removing entry from queue")
@@ -86,12 +98,16 @@ def doit():
         li = {}
         li["_id"] = i["_id"]
         li["recom_by"] = product_asin
-        li = extract_text(li, 1)
+        (li, trfr) = extract_text(li, 1)
 
+        if not trfr:
+            queue.remove({"_id": product_asin}, 1)
+            continue
         logging.info("reviews loaded into recom for " + li['title'])
         logging.info("removing entry from queue")
         queue.remove({"_id": product_asin}, 1)
-   #assert(inserted_review == product_asin)
+
+    assert(inserted_review == product_asin)
 
 if __name__ == '__main__':
     main()
